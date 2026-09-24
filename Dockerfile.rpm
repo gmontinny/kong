@@ -1,0 +1,74 @@
+# When you update this file substantially, please update build_your_own_images.md as well.
+FROM registry.access.redhat.com/ubi9-minimal@sha256:92b1d5747a93608b6adb64dfd54515c3c5a360802db4706765ff3d8470df6290
+
+LABEL maintainer="Kong Docker Maintainers <docker@konghq.com> (@team-gateway-bot)"
+
+ARG KONG_VERSION=3.9.3
+ENV KONG_VERSION $KONG_VERSION
+
+# RedHat required labels
+LABEL name="Kong" \
+      vendor="Kong" \
+      version="$KONG_VERSION" \
+      release="1" \
+      url="https://konghq.com" \
+      summary="Next-Generation API Platform for Modern Architectures" \
+      description="Next-Generation API Platform for Modern Architectures"
+
+# RedHat required LICENSE file approved path
+COPY LICENSE /licenses/
+
+ARG KONG_SHA256="51183a20bf470f218244ddbf1f5f3459aae3ece80fb996653adc35310e675df5"
+
+ARG KONG_PREFIX=/usr/local/kong
+ENV KONG_PREFIX $KONG_PREFIX
+
+ARG ASSET=remote
+ARG EE_PORTS
+
+COPY kong.rpm /tmp/kong.rpm
+
+# hadolint ignore=DL3015
+RUN set -ex; \
+    if [ "$ASSET" = "remote" ] ; then \
+      KONG_REPO=$(echo ${KONG_VERSION%.*} | sed 's/\.//') \
+      && DOWNLOAD_URL="https://packages.konghq.com/public/gateway-$KONG_REPO/rpm/el/9/x86_64/kong-$KONG_VERSION.el9.x86_64.rpm" \
+      && curl -fL $DOWNLOAD_URL -o /tmp/kong.rpm \
+      && echo "$KONG_SHA256  /tmp/kong.rpm" | sha256sum -c - \
+      || exit 1; \
+    fi \
+    # findutils provides xargs (temporarily)
+    && microdnf install --assumeyes --nodocs \
+      findutils \
+      shadow-utils \
+      unzip \
+    && rpm -qpR /tmp/kong.rpm \
+      | grep -v rpmlib \
+      | xargs -n1 -t microdnf install --assumeyes --nodocs \
+    # Please update the rhel install docs if the below line is changed so that
+    # end users can properly install Kong along with its required dependencies
+    # and that our CI does not diverge from our docs.
+    && rpm -iv /tmp/kong.rpm \
+    && microdnf -y clean all \
+    && rm /tmp/kong.rpm \
+    && chown kong:0 /usr/local/bin/kong \
+    && chown -R kong:0 ${KONG_PREFIX} \
+    && ln -sf /usr/local/openresty/bin/resty /usr/local/bin/resty \
+    && ln -sf /usr/local/openresty/luajit/bin/luajit /usr/local/bin/luajit \
+    && ln -sf /usr/local/openresty/luajit/bin/luajit /usr/local/bin/lua \
+    && ln -sf /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/nginx \
+    && kong version
+
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
+USER kong
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+EXPOSE 8000 8443 8001 8444 $EE_PORTS
+
+STOPSIGNAL SIGQUIT
+
+HEALTHCHECK --interval=60s --timeout=10s --retries=10 CMD kong-health
+
+CMD ["kong", "docker-start"]
