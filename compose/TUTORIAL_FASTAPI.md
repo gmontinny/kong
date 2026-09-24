@@ -150,6 +150,8 @@ Quando o limite for atingido, o Kong retorna `HTTP 429 Too Many Requests`.
 > incluindo `/docs`. Para manter o Swagger público, o plugin deve ser aplicado
 > apenas na rota `/api`, não no serviço.
 
+### Via kong.yaml
+
 ```yaml
 _format_version: "2.1"
 _transform: true
@@ -184,16 +186,57 @@ consumers:
       - key: minha-chave-secreta-123
 ```
 
-Uso pelo cliente:
+### Via Admin API
+
+```shell
+# 1. Adicionar o plugin key-auth na rota mtdash-endpoints
+$ curl -X POST http://localhost:8001/routes/mtdash-endpoints/plugins \
+  -d "name=key-auth" \
+  -d "config.key_names[]=X-API-Key"
+
+# 2. Criar o consumer
+$ curl -X POST http://localhost:8001/consumers \
+  -d "username=app-frontend"
+
+# 3. Criar a chave para o consumer
+# Deixe o campo key em branco para gerar automaticamente
+$ curl -X POST http://localhost:8001/consumers/app-frontend/key-auth \
+  -d "key=minha-chave-secreta-123"
+```
+
+### Via Kong Manager
+
+**Passo 1 — Adicionar o plugin na rota `mtdash-endpoints`:**
+1. Menu lateral → **Routes** → abra `mtdash-endpoints`
+2. Aba **Plugins** → **New Plugin** → escolha **Key Authentication**
+3. **Key Names:** digite `X-API-Key` e pressione **Enter**
+4. Clique em **Save**
+
+**Passo 2 — Criar o Consumer:**
+1. Menu lateral → **Consumers** → **New Consumer**
+2. **Username:** `app-frontend` → **Save**
+
+**Passo 3 — Criar a chave de acesso:**
+1. Abra o consumer `app-frontend` → aba **Credentials** → **New Key Auth Credential**
+2. **Key:** digite o valor desejado, ex: `minha-chave-123`, ou deixe **em branco** para gerar automaticamente
+3. Clique em **Save** e copie o valor da chave gerada
+
+### Usando a chave
 
 ```shell
 $ curl http://localhost:8000/api/v1/taxa-mortalidade-infantil/ \
-  -H "X-API-Key: minha-chave-secreta-123"
+  -H "X-API-Key: minha-chave-123"
 ```
+
+Ou no **Insomnia/Postman**:
+- Header **Key:** `X-API-Key`
+- Header **Value:** `minha-chave-123`
 
 ---
 
 ## 6. Adicionando autenticação JWT
+
+### Via kong.yaml
 
 ```yaml
 _format_version: "2.1"
@@ -230,7 +273,44 @@ consumers:
         secret: meu-segredo-jwt
 ```
 
-Uso pelo cliente:
+### Via Admin API
+
+```shell
+# 1. Adicionar o plugin jwt na rota mtdash-endpoints
+$ curl -X POST http://localhost:8001/routes/mtdash-endpoints/plugins \
+  -d "name=jwt" \
+  -d "config.claims_to_verify[]=exp"
+
+# 2. Criar o consumer
+$ curl -X POST http://localhost:8001/consumers \
+  -d "username=usuario-jwt"
+
+# 3. Criar o segredo JWT para o consumer
+$ curl -X POST http://localhost:8001/consumers/usuario-jwt/jwt \
+  -d "key=meu-issuer" \
+  -d "secret=meu-segredo-jwt"
+```
+
+### Via Kong Manager
+
+**Passo 1 — Adicionar o plugin na rota `mtdash-endpoints`:**
+1. Menu lateral → **Routes** → abra `mtdash-endpoints`
+2. Aba **Plugins** → **New Plugin** → escolha **JWT**
+3. **Claims To Verify:** digite `exp` e pressione **Enter**
+4. Clique em **Save**
+
+**Passo 2 — Criar o Consumer:**
+1. Menu lateral → **Consumers** → **New Consumer**
+2. **Username:** `usuario-jwt` → **Save**
+
+**Passo 3 — Criar o segredo JWT:**
+1. Abra o consumer `usuario-jwt` → aba **Credentials** → **New JWT Credential**
+2. Preencha:
+   - **Key (issuer):** `meu-issuer`
+   - **Secret:** `meu-segredo-jwt`
+3. Clique em **Save**
+
+### Usando o token
 
 ```shell
 $ curl http://localhost:8000/api/v1/taxa-mortalidade-infantil/ \
@@ -279,7 +359,12 @@ services:
 
 ---
 
-## 8. Adicionando logs de requisições
+## 8. Adicionando logs de requisições (file-log)
+
+O plugin `file-log` grava um JSON por linha em um arquivo dentro do contêiner
+a cada requisição recebida pelo Kong.
+
+### Via kong.yaml
 
 ```yaml
 _format_version: "2.1"
@@ -299,6 +384,57 @@ services:
           - /
         strip_path: false
 ```
+
+### Via Admin API
+
+```shell
+# Adicionar o plugin file-log no serviço
+$ curl -X POST http://localhost:8001/services/mtdash-api/plugins \
+  -d "name=file-log" \
+  -d "config.path=/tmp/kong-access.log" \
+  -d "config.reopen=true"
+```
+
+### Via Kong Manager
+
+1. Menu lateral → **Gateway Services** → abra `mtdash-api`
+2. Aba **Plugins** → **New Plugin** → escolha **File Log**
+3. Preencha:
+   - **Path:** `/tmp/kong-access.log`
+   - **Reopen:** ativado
+4. Clique em **Save**
+
+### Visualizando os logs
+
+O arquivo fica dentro do contêiner Kong. Para visualizar:
+
+```shell
+# últimas 10 linhas
+$ docker exec kong-kong-1 tail -n 10 /tmp/kong-access.log
+
+# acompanhar em tempo real
+$ docker exec kong-kong-1 tail -f /tmp/kong-access.log
+```
+
+Cada linha é um JSON com os seguintes campos principais:
+
+| Campo | Descrição |
+|-------|-----------|
+| `client_ip` | IP do cliente |
+| `request.method` | GET, POST, etc |
+| `request.uri` | caminho acessado |
+| `response.status` | código HTTP retornado |
+| `upstream_status` | status retornado pela FastAPI |
+| `latencies.request` | tempo total em ms |
+| `latencies.proxy` | tempo da FastAPI em ms |
+
+> O log fica dentro do contêiner e é perdido se o contêiner for removido.
+> Para persistir, adicione um volume no `docker-compose.yml`:
+>
+> ```yaml
+> volumes:
+>   - ./logs/kong-access.log:/tmp/kong-access.log
+> ```
 
 ---
 
@@ -470,18 +606,24 @@ Ou no **Insomnia/Postman**:
 
 ---
 
-### 10.5 Adicionando outros plugins
+### 10.5 Adicionando o plugin file-log
 
-Plugins de autenticação (`key-auth`, `jwt`) → adicione na **rota** `mtdash-endpoints`.
-Plugins gerais (CORS, rate-limiting, logs) → adicione no **serviço** `mtdash-api`.
+1. Menu lateral → **Gateway Services** → abra `mtdash-api`
+2. Aba **Plugins** → **New Plugin** → escolha **File Log**
+3. Preencha:
+   - **Path:** `/tmp/kong-access.log`
+   - **Reopen:** ativado
+4. Clique em **Save**
 
-| Plugin | Onde adicionar |
-|--------|---------------|
-| `key-auth` | Rota `mtdash-endpoints` |
-| `jwt` | Rota `mtdash-endpoints` |
-| `rate-limiting` | Serviço `mtdash-api` |
-| `cors` | Serviço `mtdash-api` |
-| `file-log` | Serviço `mtdash-api` |
+Para visualizar os logs:
+
+```shell
+# últimas 10 linhas
+$ docker exec kong-kong-1 tail -n 10 /tmp/kong-access.log
+
+# tempo real
+$ docker exec kong-kong-1 tail -f /tmp/kong-access.log
+```
 
 ---
 
